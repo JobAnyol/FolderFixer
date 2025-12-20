@@ -3,7 +3,7 @@
 **Messy Desktop? Fixed in One Click.**
 散らかったデスクトップやダウンロードフォルダを、ワンクリックで整理整頓するツール。
 
-![Icon](clean_high.ico)
+![Icon](favicon.ico)
 
 ## 🚀 Features (機能)
 - **One-Click Sort / ワンクリック整理**
