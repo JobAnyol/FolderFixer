@@ -2,7 +2,9 @@ import os
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
-import ctypes # Windowsのシステム設定を触るためのライブラリ
+import ctypes  # Windowsのシステム設定を触るためのライブラリ
+import sys
+
 
 class FileOrganizerApp:
     CATEGORY_MAP = {
@@ -12,10 +14,18 @@ class FileOrganizerApp:
         "Audio": ["mp3", "wav", "flac", "m4a"],
         "Archives": ["zip", "rar", "7z", "tar", "gz"],
         "Installers": ["exe", "msi", "dmg", "iso"],
-        "Programs": ["py", "js", "html", "css", "cpp", "java"]
+        "Programs": ["py", "js", "html", "css", "cpp", "java"],
     }
     CATEGORY_KEYS = list(CATEGORY_MAP.keys())
     OTHER_CATEGORY = "Others"
+
+    # OSメタデータとして保護したいファイル（大文字小文字は無視）
+    PROTECTED_FILENAMES = {
+        "desktop.ini",
+        "thumbs.db",
+        "ehthumbs.db",
+        ".ds_store",
+    }
 
     def __init__(self):
         # 高画質化コード（さっき入れたやつ）
@@ -24,9 +34,28 @@ class FileOrganizerApp:
         except Exception:
             ctypes.windll.user32.SetProcessDPIAware()
 
+        # Windows ファイル属性取得（Hidden/System 判定用）
+        self._get_file_attrs = None
+        if os.name == "nt":
+            try:
+                self._get_file_attrs = ctypes.windll.kernel32.GetFileAttributesW
+                self._get_file_attrs.argtypes = [ctypes.c_wchar_p]
+                self._get_file_attrs.restype = ctypes.c_uint32
+            except Exception:
+                self._get_file_attrs = None
+
+        # 実行中アプリ自身（exe/py）だけを除外するためのベース名
+        # - exeパッケージ実行時: sys.executable が当該 exe のパスになる
+        # - py実行時: __file__ が当該スクリプトのパスになる
+        self._self_basenames = {os.path.basename(sys.executable).lower()}
+        try:
+            self._self_basenames.add(os.path.basename(__file__).lower())
+        except Exception:
+            pass
+
         self.root = tk.Tk()
         self.root.title("Tidy-Bot (Desktop Cleaner)")
-        self.root.geometry("600x480") 
+        self.root.geometry("600x480")
         self.root.configure(bg="#f0f2f5")
 
         # ===========【ここを追加】===========
@@ -34,8 +63,8 @@ class FileOrganizerApp:
         self.root.lift()
         self.root.focus_force()
         # 一瞬だけ「常に手前」にして、すぐに解除する（確実に見えるようにするため）
-        self.root.attributes('-topmost', True)
-        self.root.after_idle(self.root.attributes, '-topmost', False)
+        self.root.attributes("-topmost", True)
+        self.root.after_idle(self.root.attributes, "-topmost", False)
         # ===================================
 
         # Folder selection
@@ -53,10 +82,22 @@ class FileOrganizerApp:
         # タイトルエリア
         header_frame = tk.Frame(self.root, bg="white", pady=15)
         header_frame.pack(fill="x")
-        
-        title = tk.Label(header_frame, text="Desktop Cleaner", font=title_font, bg="white", fg="#1a73e8")
+
+        title = tk.Label(
+            header_frame,
+            text="Desktop Cleaner",
+            font=title_font,
+            bg="white",
+            fg="#1a73e8",
+        )
         title.pack()
-        subtitle = tk.Label(header_frame, text="散らかったフォルダを一瞬で整理整頓", font=("Meiryo UI", 9), bg="white", fg="#5f6368")
+        subtitle = tk.Label(
+            header_frame,
+            text="散らかったフォルダを一瞬で整理整頓",
+            font=("Meiryo UI", 9),
+            bg="white",
+            fg="#5f6368",
+        )
         subtitle.pack()
 
         # メインエリア
@@ -68,31 +109,70 @@ class FileOrganizerApp:
         select_frame.pack(fill="x", pady=(0, 20))
 
         # 【修正】ボタンを先に配置（pack）する！これで絶対に隠れない
-        sel_btn = tk.Button(select_frame, text="📂 フォルダ選択", font=bold_font,
-                            bg="#fff", fg="#1a73e8", command=self._choose_folder, 
-                            activebackground="#e8f0fe", relief="raised", bd=1)
-        sel_btn.pack(side="right") # 右側に固定
+        sel_btn = tk.Button(
+            select_frame,
+            text="📂 フォルダ選択",
+            font=bold_font,
+            bg="#fff",
+            fg="#1a73e8",
+            command=self._choose_folder,
+            activebackground="#e8f0fe",
+            relief="raised",
+            bd=1,
+        )
+        sel_btn.pack(side="right")  # 右側に固定
 
         # 【修正】ラベルは残りのスペースを埋めるように配置（width指定を削除）
-        self.folder_label = tk.Label(select_frame, text="フォルダが選択されていません", bg="white", fg="#555", 
-                                   font=base_font, relief="flat", padx=10, pady=8, anchor="w")
+        self.folder_label = tk.Label(
+            select_frame,
+            text="フォルダが選択されていません",
+            bg="white",
+            fg="#555",
+            font=base_font,
+            relief="flat",
+            padx=10,
+            pady=8,
+            anchor="w",
+        )
         self.folder_label.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
         # 実行ボタン
-        run_btn = tk.Button(main_frame, text="✨ 整理を開始 (RUN)", font=("Meiryo UI", 12, "bold"),
-                            bg="#1a73e8", fg="white", cursor="hand2",
-                            command=self._start_organizing, activebackground="#1557b0", 
-                            relief="flat", pady=10)
+        run_btn = tk.Button(
+            main_frame,
+            text="✨ 整理を開始 (RUN)",
+            font=("Meiryo UI", 12, "bold"),
+            bg="#1a73e8",
+            fg="white",
+            cursor="hand2",
+            command=self._start_organizing,
+            activebackground="#1557b0",
+            relief="flat",
+            pady=10,
+        )
         run_btn.pack(fill="x", pady=(0, 20))
 
         # ログエリア
         log_frame = tk.Frame(main_frame, bg="#f0f2f5")
         log_frame.pack(fill="both", expand=True)
-        
-        log_label = tk.Label(log_frame, text="実行ログ:", font=("Meiryo UI", 9, "bold"), bg="#f0f2f5", fg="#5f6368")
+
+        log_label = tk.Label(
+            log_frame,
+            text="実行ログ:",
+            font=("Meiryo UI", 9, "bold"),
+            bg="#f0f2f5",
+            fg="#5f6368",
+        )
         log_label.pack(anchor="w", pady=(0, 5))
 
-        self.log_area = scrolledtext.ScrolledText(log_frame, font=("Consolas", 9), height=8, wrap=tk.WORD, state="disabled", bg="white", relief="flat")
+        self.log_area = scrolledtext.ScrolledText(
+            log_frame,
+            font=("Consolas", 9),
+            height=8,
+            wrap=tk.WORD,
+            state="disabled",
+            bg="white",
+            relief="flat",
+        )
         self.log_area.pack(fill="both", expand=True)
 
     def _choose_folder(self):
@@ -110,24 +190,63 @@ class FileOrganizerApp:
         self._log("処理を開始します...")
         self.root.after(100, lambda: self._organize_files(folder))
 
+    def _is_hidden_or_system_file(self, path):
+        """
+        Windows: Hidden/System 属性のファイルを判定する
+        取得に失敗した場合は False（＝除外しない）として扱う
+        """
+        if os.name != "nt" or self._get_file_attrs is None:
+            return False
+        try:
+            attrs = self._get_file_attrs(path)
+            if attrs == 0xFFFFFFFF:
+                return False
+            FILE_ATTRIBUTE_HIDDEN = 0x2
+            FILE_ATTRIBUTE_SYSTEM = 0x4
+            return bool(attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))
+        except Exception:
+            return False
+
+    def _should_skip_file(self, fname, src_path):
+        """
+        OSメタデータや隠し/システム属性ファイル、アプリ自身など
+        移動対象から除外すべきファイルか判定する
+        """
+        name_l = fname.lower()
+
+        # アプリ自身（exe/py）を除外（拡張子一律除外はしない）
+        if name_l in self._self_basenames:
+            return True
+
+        # 既知の OS メタデータを除外
+        if name_l in self.PROTECTED_FILENAMES:
+            return True
+
+        # Hidden/System 属性は除外（Windows）
+        if self._is_hidden_or_system_file(src_path):
+            return True
+
+        return False
+
     def _organize_files(self, folder):
         moved_count = 0
         try:
             files = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
             total = len(files)
-            
+
             if total == 0:
                 self._log("整理するファイルが見つかりませんでした。")
                 return
 
             self._log(f"検出されたファイル数: {total}")
-            
+
             for fname in files:
-                # 自分自身のスクリプトやexeは移動しないようにする安全策
-                if fname.endswith(".py") or fname.endswith(".exe") or fname.endswith(".ico"):
+                src_path = os.path.join(folder, fname)
+
+                # OSメタデータ / 隠し・システム / アプリ自身は移動しない
+                if self._should_skip_file(fname, src_path):
                     continue
 
-                src_path = os.path.join(folder, fname)
                 ext = os.path.splitext(fname)[1][1:].lower()
                 category = self._get_category_by_ext(ext)
 
@@ -141,11 +260,11 @@ class FileOrganizerApp:
                 shutil.move(src_path, dest_path)
                 moved_count += 1
                 self._log(f"✔ [{category}] {fname}")
-            
+
             self._log("-" * 30)
             self._log(f"完了！ 合計 {moved_count} 個のファイルを整理しました。")
             messagebox.showinfo("成功", f"整理完了！\n{moved_count}個のファイルを移動しました。")
-            
+
         except Exception as e:
             self._log(f"❌ エラー: {str(e)}")
 
@@ -171,6 +290,7 @@ class FileOrganizerApp:
         self.log_area.insert("end", msg + "\n")
         self.log_area.see("end")
         self.log_area.configure(state="disabled")
+
 
 if __name__ == "__main__":
     FileOrganizerApp()
